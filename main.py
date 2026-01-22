@@ -34,6 +34,7 @@ PIECE_SIZE = SQUARE_SIZE // 2  # Size for the available pieces
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption('MBTI Quarto')
 screen.fill(BLACK)
+clock = pygame.time.Clock()
 
 # Initialize board and pieces
 board = np.zeros((BOARD_ROWS, BOARD_COLS), dtype=int)
@@ -67,7 +68,7 @@ def draw_available_pieces():
     font = pygame.font.Font(None, 30)
     # Clear the area where available pieces are displayed
     pygame.draw.rect(screen, BLACK, pygame.Rect(0, WIDTH, WIDTH, HEIGHT - WIDTH))
-    
+
     for idx, piece in enumerate(available_pieces):
         col = idx % 4
         row = idx // 4
@@ -111,33 +112,37 @@ def check_2x2_subgrid_win():
     return False
 
 def check_win():
-    # Check rows, columns, and diagonals
+    # Check columns
     for col in range(BOARD_COLS):
         if check_line([board[row][col] for row in range(BOARD_ROWS)]):
             return True
-    
+
+    # Check rows
     for row in range(BOARD_ROWS):
         if check_line([board[row][col] for col in range(BOARD_COLS)]):
             return True
-        
+
+    # Check diagonals
     if check_line([board[i][i] for i in range(BOARD_ROWS)]) or check_line([board[i][BOARD_ROWS - i - 1] for i in range(BOARD_ROWS)]):
         return True
 
     # Check 2x2 sub-grids
     if check_2x2_subgrid_win():
         return True
-    
+
     return False
 
 def restart_game():
-    global board, available_pieces, selected_piece, player
+    global board, available_pieces, selected_piece, turn, flag, game_over
     screen.fill(BLACK)
     draw_lines()
     board = np.zeros((BOARD_ROWS, BOARD_COLS), dtype=int)
     available_pieces = pieces[:]
     selected_piece = None  # Reset selected piece
-    draw_available_pieces()
-    display_message(f"Player {player}'s turn")
+    P2.reset_inputs()      # 사람 입력 버퍼도 초기화
+    flag = "select_piece"
+    turn = 1
+    game_over = False
 
 def display_message(message, color=WHITE):
     font = pygame.font.Font(None, 50)
@@ -165,11 +170,10 @@ def display_time(total_time_consumption, color=GRAY):
     text_rect = text_surface.get_rect(center=(WIDTH // 2, HEIGHT - 90))
     screen.blit(text_surface, text_rect)
 
-# Game loop
-turn = 1 
+# Game loop states
+turn = 1
 flag = "select_piece"
 game_over = False
-selected_piece = None
 
 total_time_consumption = {
     1: 0,
@@ -180,37 +184,70 @@ draw_lines()
 draw_available_pieces()
 
 while True:
+    # ---- Event handling (키/마우스 입력 수집) ----
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             pygame.quit()
             sys.exit()
 
-        if event.type == pygame.KEYDOWN and flag=="select_piece" and not game_over:
-            pressed = pygame.key.get_pressed()
+        # Restart
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_r:
+            restart_game()
+            total_time_consumption[1] = total_time_consumption[2] = 0
 
-            if pressed[pygame.K_SPACE]:
-                begin = time.time()
-                player = players[3-turn](board=board, available_pieces=available_pieces)
-                selected_piece = player.select_piece()
-                finish = time.time()
-                total_time_consumption[3-turn]+=(finish-begin)
+        # Human click input (P2) - 현재 행동 주체가 P2일 때만 클릭을 해석
+        if (not game_over) and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            actor_cls = None
+            if flag == "select_piece":
+                actor_cls = players[3 - turn]  # 상대가 선택
+            elif flag == "place_piece":
+                actor_cls = players[turn]      # 내가 배치
+
+            if actor_cls is P2:
+                P2.handle_mouse_click(
+                    mouse_pos=event.pos,
+                    flag=flag,
+                    available_pieces=available_pieces,
+                    board=board,
+                    width=WIDTH,
+                    square_size=SQUARE_SIZE,
+                    piece_size=PIECE_SIZE,
+                )
+
+    if not game_over:
+        if flag == "select_piece":
+            selector_cls = players[3 - turn]  # 이번에 말을 고르는 쪽(상대)
+
+            begin = time.time()
+            selector = selector_cls(board=board, available_pieces=available_pieces)
+            picked = selector.select_piece()
+            finish = time.time()
+
+            # P2는 클릭이 없으면 None을 반환하도록 구현됨 -> 아직 진행 X
+            if picked is not None:
+                total_time_consumption[3 - turn] += (finish - begin)
+                selected_piece = picked
                 flag = "place_piece"
 
-        elif event.type == pygame.KEYDOWN and flag=="place_piece" and not game_over:
-            pressed = pygame.key.get_pressed()
+        elif flag == "place_piece":
+            placer_cls = players[turn]  # 이번에 말을 놓는 쪽(현재 turn)
 
-            if pressed[pygame.K_SPACE]:
-                begin = time.time()
-                player = players[turn](board=board, available_pieces=available_pieces)
-                (board_row, board_col) = player.place_piece(selected_piece)
-                finish = time.time()
-                total_time_consumption[turn]+=(finish-begin)
+            begin = time.time()
+            placer = placer_cls(board=board, available_pieces=available_pieces)
+            pos = placer.place_piece(selected_piece)
+            finish = time.time()
+
+            # P2는 클릭이 없으면 None 반환 -> 아직 진행 X
+            if pos is not None:
+                total_time_consumption[turn] += (finish - begin)
+                board_row, board_col = pos
 
                 if available_square(board_row, board_col):
                     # Place the selected piece on the board
                     board[board_row][board_col] = pieces.index(selected_piece) + 1
                     available_pieces.remove(selected_piece)
                     selected_piece = None
+                    P2.reset_place_only()  # 배치 버퍼만 정리
 
                     if check_win():
                         game_over = True
@@ -221,34 +258,29 @@ while True:
                     else:
                         turn = 3 - turn
                         flag = "select_piece"
+                        P2.reset_select_only()  # 다음 선택을 위해 선택 버퍼 정리
                 else:
-                    print(f"P{turn}; wrong selection")
+                    # 잘못된 칸 클릭 -> 유지 (다시 클릭)
+                    pass
 
-        if event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_r:
-                restart_game()
-                game_over = False
-                turn = 1 
-                flag = "select_piece"
-                total_time_consumption[1] = total_time_consumption[2] = 0
+    # ---- Render (매 프레임 화면 갱신) ----
+    screen.fill(BLACK)
+    draw_lines()
+    draw_pieces()
+    draw_available_pieces()
 
-        if not game_over:
-            draw_pieces()
-            draw_available_pieces()
-            if selected_piece:
-                display_message(f"P{turn} placing pieces")
-                display_time(total_time_consumption)
-            else:
-                display_message(f"P{3-turn} selecting pieces")
-                display_time(total_time_consumption)
+    if not game_over:
+        if selected_piece:
+            display_message(f"P{turn} placing piece")
         else:
-            draw_pieces()
-            draw_available_pieces()
-            if winner:
-                display_message(f"Player {winner} Wins!", GREEN)
-                display_time(total_time_consumption)
-            elif is_board_full():
-                display_message("Draw!", GRAY)
-                display_time(total_time_consumption)
+            display_message(f"P{3 - turn} selecting piece")
+        display_time(total_time_consumption)
+    else:
+        if winner:
+            display_message(f"Player {winner} Wins!", GREEN)
+        else:
+            display_message("Draw!", GRAY)
+        display_time(total_time_consumption)
 
-        pygame.display.update()
+    pygame.display.update()
+    clock.tick(60)

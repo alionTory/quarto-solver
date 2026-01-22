@@ -1,45 +1,85 @@
-import numpy as np
-import subprocess
-from itertools import product
+# machines_p2.py
 
-import time
+class P2:
+    """
+    Human player driven by GUI clicks.
+    - During select_piece phase: click an available piece below the board.
+    - During place_piece phase: click a board cell.
+    """
 
-CPP_PROGRAM_PATH = "./QuartoCppCode.out"
-# CPP_PROGRAM_PATH = "./QuartoCppCode.out" #linux
+    # class-level buffers (because main loop instantiates P2 repeatedly)
+    _picked_piece = None     # tuple like (0,1,0,1)
+    _picked_pos = None       # (row, col)
 
-class P2():
     def __init__(self, board, available_pieces):
-        self.pieces = [(i, j, k, l) for i in range(2) for j in range(2) for k in range(2) for l in range(2)]  # All 16 pieces
-        self.board = board # Include piece indices. 0:empty / 1~16:piece
-        self.available_pieces = available_pieces # Currently available pieces in a tuple type (e.g. (1, 0, 1, 0))
-    
+        self.board = board
+        self.available_pieces = available_pieces
+
+    # ---- called by main when mouse is clicked ----
+    @classmethod
+    def handle_mouse_click(cls, mouse_pos, flag, available_pieces, board, width, square_size, piece_size):
+        x, y = mouse_pos
+
+        if flag == "select_piece":
+            # Available pieces are displayed in the area y >= width
+            if y < width:
+                return
+
+            rel_y = y - width
+            col = x // square_size
+            row = rel_y // piece_size
+            idx = row * 4 + col
+
+            if 0 <= idx < len(available_pieces):
+                cls._picked_piece = available_pieces[idx]
+
+        elif flag == "place_piece":
+            # Board area is y < width
+            if y >= width:
+                return
+
+            col = x // square_size
+            row = y // square_size
+
+            if 0 <= row < board.shape[0] and 0 <= col < board.shape[1]:
+                cls._picked_pos = (row, col)
+
+    # ---- required interface ----
     def select_piece(self):
-        # Make your own algorithm here
+        """
+        Return a piece tuple when user has clicked one; otherwise None.
+        """
+        piece = P2._picked_piece
+        if piece is None:
+            return None
 
-        # if len(self.available_pieces) >= 13:
-        #     return random.choice(self.available_pieces)
-
-        result = subprocess.run(CPP_PROGRAM_PATH, text=True, stdout=subprocess.PIPE, input=self.makeInput()).stdout
-        return self.pieces[int(result)]
-
+        # consume buffer
+        P2._picked_piece = None
+        return piece
 
     def place_piece(self, selected_piece):
-        # selected_piece: The selected piece that you have to place on the board (e.g. (1, 0, 1, 0)).
-        # if len(self.available_pieces) >= 13:
-        #     available_locs = [(row, col) for row, col in product(range(4), range(4)) if self.board[row][col]==0]
-        #     return random.choice(available_locs)
+        """
+        Return (row, col) when user has clicked a cell; otherwise None.
+        selected_piece is unused here but kept to match interface.
+        """
+        pos = P2._picked_pos
+        if pos is None:
+            return None
 
-        result = subprocess.run(CPP_PROGRAM_PATH, text=True, stdout=subprocess.PIPE, input=self.makeInput(selected_piece)).stdout
-        result = tuple(map(int, result.split(',')))
-        return result
+        # consume buffer
+        P2._picked_pos = None
+        return pos
 
-    def makeInput(self, selected_piece = None):
-        boardMinus1 = np.vectorize(lambda x : x-1)(self.board)
-        resultString = '\n'.join([' '.join(map(str, row)) for row in boardMinus1])
-        resultString += '\n' + str(len(self.available_pieces))
-        resultString += '\n' + ' '.join([str(self.pieces.index(availablePiece)) for availablePiece in self.available_pieces])
-        if selected_piece==None:
-            resultString += '\n0'
-        else:
-            resultString += '\n1 ' + str(self.pieces.index(selected_piece))
-        return resultString
+    # ---- helpers for resetting buffers ----
+    @classmethod
+    def reset_inputs(cls):
+        cls._picked_piece = None
+        cls._picked_pos = None
+
+    @classmethod
+    def reset_select_only(cls):
+        cls._picked_piece = None
+
+    @classmethod
+    def reset_place_only(cls):
+        cls._picked_pos = None
